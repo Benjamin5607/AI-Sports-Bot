@@ -6,7 +6,7 @@ on:
     # 한국 시간 기준 오후 6시 (UTC 09:00)
     - cron: '0 23 * * *'
     - cron: '0 9 * * *'
-  workflow_dispatch: # 수동 실행 버튼 (테스트용)
+  workflow_dispatch: # 수동 실행 버튼
 
 jobs:
   run-bot:
@@ -26,10 +26,8 @@ jobs:
 
       - name: 봇 실행
         env:
-          TWITTER_API_KEY: ${{ secrets.TWITTER_API_KEY }}
-          TWITTER_API_SECRET: ${{ secrets.TWITTER_API_SECRET }}
-          TWITTER_ACCESS_TOKEN: ${{ secrets.TWITTER_ACCESS_TOKEN }}
-          TWITTER_ACCESS_SECRET: ${{ secrets.TWITTER_ACCESS_SECRET }}
+          # 👇 여기가 핵심! 금고에서 꺼내서 봇에게 전달하는 과정
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           python bot.py
