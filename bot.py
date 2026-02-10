@@ -1,88 +1,95 @@
-import tweepy
 import os
+import requests
 import random
 from datetime import datetime
 from groq import Groq
 
-# 1. 환경 변수 로드
-consumer_key = os.environ.get("TWITTER_API_KEY")
-consumer_secret = os.environ.get("TWITTER_API_SECRET")
-access_token = os.environ.get("TWITTER_ACCESS_TOKEN")
-access_token_secret = os.environ.get("TWITTER_ACCESS_SECRET")
+# 1. 환경 변수
+webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
 groq_key = os.environ.get("GROQ_API_KEY")
 
-# 2. 클라이언트 연결
-client_x = tweepy.Client(
-    consumer_key=consumer_key, consumer_secret=consumer_secret,
-    access_token=access_token, access_token_secret=access_token_secret
-)
 client_groq = Groq(api_key=groq_key)
 
-# 🔄 [New] 알바생 자동 호출 함수 (지금 할 일 없는 모델 소환)
+# 2. 모델 자동 선택 (스마트함)
 def get_best_model():
     try:
         models = client_groq.models.list()
         available_models = [m.id for m in models.data]
-        
-        # 1순위: Llama 3.x 계열 (가장 똑똑함)
-        for m in available_models:
-            if "llama-3.3" in m: return m
-        for m in available_models:
-            if "llama-3.1" in m: return m
-        for m in available_models:
-            if "llama3" in m: return m
-            
-        # 2순위: Mixtral (가성비 좋음)
-        for m in available_models:
-            if "mixtral" in m: return m
-            
-        # 3순위: 아무나 나와 (오디오 모델인 whisper만 제외하고)
-        for m in available_models:
-            if "whisper" not in m: return m
-            
-        return "mixtral-8x7b-32768" # 정 안되면 이 친구로 고정
-    except Exception as e:
-        print(f"모델 리스트 못 가져옴: {e}")
-        return "mixtral-8x7b-32768" # 에러나면 안전빵으로
+        priorities = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "mixtral-8x7b-32768"]
+        for p in priorities:
+            for m in available_models:
+                if p in m: return m
+        return "mixtral-8x7b-32768"
+    except:
+        return "mixtral-8x7b-32768"
 
-# 3. 타겟 설정 (나중에 크롤링으로 대체)
+# 3. 분석 대상 (랜덤 픽)
 targets = [
-    "EPL: Man City vs Liverpool",
-    "NBA: Lakers vs Warriors",
-    "Champions League: Real Madrid vs Bayern",
-    "MLB: Dodgers vs Yankees"
+    "🏴󠁧󠁢󠁥󠁮󠁧󠁿 EPL: Man City vs Liverpool",
+    "🇪🇸 La Liga: Real Madrid vs Barcelona",
+    "🇺🇸 NBA: Lakers vs Warriors",
+    "⚾ MLB: Dodgers vs Yankees"
 ]
 today_target = random.choice(targets)
 date_str = datetime.now().strftime("%Y-%m-%d")
 
-# 4. 분석 및 트윗 생성
-def generate_tweet():
-    current_model = get_best_model() # 여기서 알바생 호출
-    print(f"🤖 오늘 근무할 모델: {current_model}")
-
+# 4. 분석 요청 (Embed용으로 짧게)
+def get_ai_analysis():
+    model = get_best_model()
     prompt = f"""
-    상황: {date_str}, {today_target} 경기.
-    역할: 냉소적인 스포츠 도박사 AI.
+    분석 대상: {today_target}
+    역할: 냉철한 스포츠 도박사 AI
     
-    트위터 포스팅 작성 (조건):
-    1. 한국어.
-    2. 승률(%)을 데이터 기반인 척 계산해서 제시.
-    3. 이모지(⚽, 📉) 사용.
-    4. 해시태그: #스포츠분석 #AI픽 #SportsEdge
-    5. 잡담 금지. 200자 이내.
+    JSON 형식으로만 대답해. (Markdown 금지)
+    {{
+        "win_rate": "홈 45% / 무 30% / 원정 25% (예시임, 알아서 계산)",
+        "pick": "홈팀 승리 (예시)",
+        "reason": "핵심 근거 한 줄 (예시)"
+    }}
     """
+    try:
+        response = client_groq.chat.completions.create(
+            messages=[{"role": "user", "content": prompt, "response_format": {"type": "json_object"}}],
+            model=model,
+        )
+        return response.choices[0].message.content
+    except:
+        # 혹시 JSON 모드 지원 안 하는 모델일 경우 대비
+        return "데이터 분석 오류 발생"
 
-    response = client_groq.chat.completions.create(
-        messages=[{"role": "user", "content": prompt}],
-        model=current_model, # 자동 선택된 모델 투입
-    )
-    return response.choices[0].message.content
+# 5. 디스코드 전송 (간지나는 Embed 스타일)
+def send_discord():
+    if not webhook_url:
+        print("⚠️ 웹훅 URL이 없습니다. 로그만 찍습니다.")
+        return
 
-# 5. 실행
-try:
-    tweet_text = generate_tweet()
-    response = client_x.create_tweet(text=tweet_text)
-    print(f"✅ 트윗 전송 성공! (ID: {response.data['id']})")
-    print(f"내용: {tweet_text}")
-except Exception as e:
-    print(f"❌ 에러 발생: {e}")
+    raw_data = get_ai_analysis()
+    
+    # 봇 프로필 & 메시지 설정
+    payload = {
+        "username": "AI Sports Edge",
+        "avatar_url": "https://cdn-icons-png.flaticon.com/512/6062/6062646.png", # 미래지향적 로봇 아이콘
+        "embeds": [
+            {
+                "title": f"📊 AI Match Prediction | {date_str}",
+                "description": f"**Target:** {today_target}\n\n{raw_data}", # JSON 그대로 뿌려도 멋짐
+                "color": 5814783, # 네온 블루
+                "footer": {
+                    "text": "Data powered by Groq Llama-3 • Not Financial Advice",
+                    "icon_url": "https://cdn-icons-png.flaticon.com/512/25/25231.png" # 깃허브 아이콘
+                }
+            }
+        ]
+    }
+
+    try:
+        response = requests.post(webhook_url, json=payload)
+        if response.status_code == 204:
+            print("✅ 디스코드 전송 성공! (침대 해킹 완료)")
+        else:
+            print(f"❌ 전송 실패: {response.status_code}, {response.text}")
+    except Exception as e:
+        print(f"❌ 에러: {e}")
+
+if __name__ == "__main__":
+    send_discord()
