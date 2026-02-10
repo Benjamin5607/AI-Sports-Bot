@@ -1,9 +1,9 @@
 import os
 import requests
 import random
-import time
 import json
-from datetime import datetime, timedelta
+import time
+from datetime import datetime
 from groq import Groq
 
 # 1. 환경 변수
@@ -13,146 +13,76 @@ groq_key = os.environ.get("GROQ_API_KEY")
 client_groq = Groq(api_key=groq_key)
 
 # ---------------------------------------------------------
-# 🕵️‍♂️ 스텔스 모듈 (인간 위장)
-# ---------------------------------------------------------
-def get_headers():
-    user_agents = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
-    ]
-    return {
-        "User-Agent": random.choice(user_agents),
-        "Referer": "https://www.google.com/",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
-    }
-
-def human_sleep():
-    # 2초에서 5초 사이 랜덤하게 쉬기 (기계적 패턴 방지)
-    sleep_time = random.uniform(2, 5)
-    print(f"🕵️‍♂️ 인간인 척 {sleep_time:.1f}초 대기 중...")
-    time.sleep(sleep_time)
-
-# ---------------------------------------------------------
-# 📡 데이터 소스 1: ESPN (Hidden API - 글로벌 표준)
+# 📡 데이터 소스: ESPN (The Global Standard)
 # ---------------------------------------------------------
 def fetch_espn_matches():
-    print("📡 [Source 1] ESPN 접속 시도...")
-    human_sleep()
+    # User-Agent를 최신 아이폰/크롬으로 위장
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Accept": "*/*"
+    }
     
-    # ESPN은 종목별로 주소가 다름. 오늘은 축구(EPL)와 농구(NBA) 스캔
-    sources = [
-        ("soccer/eng.1", "EPL"),          # 프리미어리그
-        ("soccer/esp.1", "La Liga"),      # 라리가
-        ("basketball/nba", "NBA"),        # NBA
-        ("soccer/uefa.champions", "UCL")  # 챔스
+    # 인기 종목 API 엔드포인트
+    leagues = [
+        ("soccer/eng.1", "🇬🇧 EPL"), 
+        ("soccer/esp.1", "🇪🇸 La Liga"),
+        ("basketball/nba", "🇺🇸 NBA"),
+        ("soccer/uefa.champions", "🇪🇺 UCL")
     ]
     
-    matches = []
+    match_list = []
     
-    for endpoint, league_name in sources:
+    print("📡 ESPN 데이터 수신 중...")
+    
+    for endpoint, icon in leagues:
         url = f"https://site.api.espn.com/apis/site/v2/sports/{endpoint}/scoreboard"
         try:
-            res = requests.get(url, headers=get_headers())
+            res = requests.get(url, headers=headers, timeout=10)
             data = res.json()
             
             for event in data.get('events', []):
-                name = event.get('name', 'Unknown')
-                status = event.get('status', {}).get('type', {}).get('state', '')
-                
-                # 'pre'는 경기 전, 'in'은 경기 중. (종료된 건 제외)
-                if status in ['pre', 'in']:
-                    matches.append(f"[{league_name}] {name}")
+                state = event.get('status', {}).get('type', {}).get('state', '')
+                # 'pre'(경기전) 상태인 것만 수집
+                if state == 'pre':
+                    name = event.get('name', 'Unknown Match')
+                    match_list.append(f"{icon} {name}")
             
-            human_sleep() # 리그 하나 긁고 잠깐 쉬기
+            time.sleep(1) # 차단 방지용 딜레이
             
         except Exception:
-            continue # 에러 나면 다음 리그로 패스
+            continue
 
-    return matches
-
-# ---------------------------------------------------------
-# 📡 데이터 소스 2: 네이버 스포츠 (국내 최적화)
-# ---------------------------------------------------------
-def fetch_naver_matches():
-    print("📡 [Source 2] 네이버 스포츠 접속 시도...")
-    human_sleep()
-    
-    kst_now = datetime.utcnow() + timedelta(hours=9)
-    date_str = kst_now.strftime("%Y%m%d")
-    
-    url = f"https://sports.news.naver.com/wfootball/schedule/list.json?date={date_str}"
-    
-    matches = []
-    try:
-        res = requests.get(url, headers=get_headers())
-        data = res.json()
-        
-        target_leagues = ["프리미어리그", "라리가", "분데스리가", "챔피언스리그", "NBA"]
-        
-        for game in data.get('scheduleList', []):
-            league = game.get('categoryName', '')
-            home = game.get('homeTeamName', '')
-            away = game.get('awayTeamName', '')
-            state = game.get('state', '') # 'BEFORE', 'LIVE' 등
-            
-            # 진행 전이거나 라이브인 빅리그 경기만
-            if any(tl in league for tl in target_leagues) and state in ['BEFORE', 'LIVE']:
-                matches.append(f"[{league}] {home} vs {away}")
-                
-    except Exception as e:
-        print(f"❌ 네이버 실패: {e}")
-        
-    return matches
+    return list(set(match_list)) # 중복 제거 후 반환
 
 # ---------------------------------------------------------
-# 🧠 중앙 처리 장치
+# 🧠 AI 분석 (Trilingual Mode)
 # ---------------------------------------------------------
-def get_best_match():
-    # 1. ESPN 먼저 털기
-    match_pool = fetch_espn_matches()
-    
-    # 2. 만약 ESPN이 부실하면 네이버 털기
-    if not match_pool:
-        print("⚠️ ESPN 데이터 없음, 네이버로 우회합니다.")
-        match_pool = fetch_naver_matches()
-    else:
-        # 네이버도 긁어서 합치면 더 좋음 (데이터 풍부)
-        naver_pool = fetch_naver_matches()
-        match_pool.extend(naver_pool)
-    
-    # 중복 제거 및 랜덤 픽
-    match_pool = list(set(match_pool))
-    
-    if not match_pool:
-        return None
-        
-    print(f"📦 수집된 경기 목록: {len(match_pool)}개 발견")
-    return random.choice(match_pool)
-
-def get_ai_analysis(target_match):
+def get_trilingual_analysis(target_match):
+    # Llama 3는 언어 능력이 뛰어남
     model = "llama-3.3-70b-versatile"
     
+    print(f"🧠 분석 시작: {target_match} (3개 국어)")
+
     prompt = f"""
-    당신은 스포츠 도박사가 가장 신뢰하는 AI 분석관입니다.
+    Target Match: {target_match}
     
-    [Target Match]
-    {target_match}
+    You are a global sports betting expert.
+    Analyze this match and provide a prediction in strictly JSON format.
     
-    위 경기는 곧 시작하거나 진행 중인 실제 경기입니다.
-    인터넷 커뮤니티(디시인사이드, 펨코 등)의 고수 느낌으로 분석글을 작성하세요.
-    (반말 사용, 거친 말투 허용, 이모지 많이 사용)
+    Requirements for each language:
+    1. English (en): Professional, analytical tone.
+    2. Korean (ko): Natural predictions. Use terms like '정배'(favorite), '역배'(underdog). Don't sound translated.
+    3. Chinese (zh): Standard Mandarin, concise sports commentary style. Use Simplified Chinese.
 
-    1. 📊 **전력 팩트체크**
-       - 양 팀의 최근 분위기 3줄 요약
-
-    2. 👿 **악마의 속삭임 (Key Insight)**
-       - 배당률이나 라인업 변수 등 날카로운 지적
-
-    3. 💰 **최종 픽 (Pick)**
-       - [승/패] 또는 [언더/오버] 딱 정해서 말해.
-       - "형 믿고 따라와" 멘트 추가.
+    JSON Structure:
+    {{
+        "en": "Prediction (Winner/Score) - Reason",
+        "ko": "예측 (승패/점수) - 핵심 근거",
+        "zh": "预测 (胜负/比分) - 分析理由",
+        "pick_icon": "🔥" (Hot) or "🛡️" (Safe) or "💣" (Risky)
+    }}
+    
+    Output ONLY valid JSON. No markdown.
     """
     
     try:
@@ -160,41 +90,69 @@ def get_ai_analysis(target_match):
             messages=[{"role": "user", "content": prompt}],
             model=model,
         )
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+        # 혹시 Markdown ```json 같은거 붙으면 떼어내기
+        content = content.replace("```json", "").replace("```", "").strip()
+        return json.loads(content)
     except Exception as e:
-        return f"분석 엔진 과부하: {e}"
+        print(f"❌ JSON 파싱 실패 또는 AI 에러: {e}")
+        return None
 
 # ---------------------------------------------------------
 # 🚀 메인 실행
 # ---------------------------------------------------------
-if __name__ == "__main__":
-    print("🚀 [System] AI Sports Edge 가동 (Stealth Mode: ON)")
+def run():
+    matches = fetch_espn_matches()
     
-    match = get_best_match()
-    
-    if match:
-        print(f"🎯 타겟 확정: {match}")
-        analysis = get_ai_analysis(match)
-        
-        payload = {
-            "username": "AI Sports Edge",
-            "avatar_url": "https://cdn-icons-png.flaticon.com/512/1698/1698535.png", # 해커/봇 느낌 아이콘
-            "embeds": [
-                {
-                    "title": f"⚡ LIVE DATA: {match}",
-                    "description": analysis,
-                    "color": 10181046, # 퍼플 (신비로운 색)
-                    "footer": {
-                        "text": "Sources: ESPN, Naver • Secured by Proxy"
+    if not matches:
+        print("💤 현재 예정된 주요 경기가 없습니다.")
+        return
+
+    # 랜덤으로 하나 뽑기
+    target_match = random.choice(matches)
+    result = get_trilingual_analysis(target_match)
+
+    if not result:
+        return
+
+    # 디스코드 전송 (Embed 꾸미기)
+    payload = {
+        "username": "AI Sports Edge Global",
+        "avatar_url": "[https://cdn-icons-png.flaticon.com/512/2072/2072130.png](https://cdn-icons-png.flaticon.com/512/2072/2072130.png)", # 지구본 아이콘
+        "embeds": [
+            {
+                "title": f"{target_match}",
+                "description": f"**Global AI Prediction** {result.get('pick_icon', '⚽')}",
+                "color": 3092790, # 청록색
+                "fields": [
+                    {
+                        "name": "🇺🇸 English",
+                        "value": result.get('en', 'Analysis Failed'),
+                        "inline": False
+                    },
+                    {
+                        "name": "🇰🇷 한국어",
+                        "value": result.get('ko', '분석 실패'),
+                        "inline": False
+                    },
+                    {
+                        "name": "🇨🇳 中文",
+                        "value": result.get('zh', '分析失败'),
+                        "inline": False
                     }
+                ],
+                "footer": {
+                    "text": "Powered by ESPN Data & Groq AI"
                 }
-            ]
-        }
-        
-        if webhook_url:
-            requests.post(webhook_url, json=payload)
-            print("✅ 디스코드 전송 완료")
-        else:
-            print(analysis)
+            }
+        ]
+    }
+
+    if webhook_url:
+        requests.post(webhook_url, json=payload)
+        print("✅ 3개 국어 리포트 전송 완료!")
     else:
-        print("💤 현재 진행 예정인 빅매치가 없습니다. 스텔스 모드 종료.")
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+if __name__ == "__main__":
+    run()
