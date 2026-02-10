@@ -1,7 +1,7 @@
 import os
 import requests
 import random
-import re
+import time
 from groq import Groq
 
 # 1. 환경 변수
@@ -11,50 +11,57 @@ groq_key = os.environ.get("GROQ_API_KEY")
 client_groq = Groq(api_key=groq_key)
 
 # ---------------------------------------------------------
-# 📡 1. 데이터 소스 (ESPN)
+# 📡 1. 종목별 데이터 소스 정의
 # ---------------------------------------------------------
-def fetch_real_matches():
-    print("📡 ESPN 데이터 검색 시작...")
+SPORTS_CATEGORIES = {
+    "⚽ SOCCER (Football)": [
+        ("soccer/eng.1", "🇬🇧 EPL"),
+        ("soccer/uefa.champions", "🇪🇺 UCL"),
+        ("soccer/esp.1", "🇪🇸 La Liga"),
+        ("soccer/ita.1", "🇮🇹 Serie A"),
+        ("soccer/deu.1", "🇩🇪 Bundesliga")
+    ],
+    "🏀 BASKETBALL": [
+        ("basketball/nba", "🇺🇸 NBA")
+    ],
+    "⚾ BASEBALL": [
+        ("baseball/mlb", "🇺🇸 MLB")
+    ]
+}
+
+def fetch_matches_by_category(endpoints):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
+    category_matches = []
     
-    endpoints = [
-        ("soccer/eng.1", "🇬🇧 EPL"),
-        ("basketball/nba", "🏀 NBA"),
-        ("soccer/uefa.champions", "🇪🇺 UCL"),
-        ("soccer/esp.1", "🇪🇸 La Liga"),
-        ("soccer/ita.1", "🇮🇹 Serie A")
-    ]
-    
-    real_matches = []
-    
-    for sport, icon in endpoints:
-        url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/scoreboard"
+    for sport_path, icon in endpoints:
+        url = f"https://site.api.espn.com/apis/site/v2/sports/{sport_path}/scoreboard"
         try:
             res = requests.get(url, headers=headers, timeout=5)
             data = res.json()
             for event in data.get('events', []):
                 state = event.get('status', {}).get('type', {}).get('state', '')
                 name = event.get('name', 'Unknown')
+                # 경기 전(pre) 상태만 수집
                 if state == 'pre': 
-                    real_matches.append(f"{icon} {name}")
+                    category_matches.append(f"{icon} {name}")
         except:
             continue
-
-    return list(set(real_matches))
+            
+    return list(set(category_matches))
 
 # ---------------------------------------------------------
-# 🧠 2. AI 분석 (구분자 방식 - 외계어 방지)
+# 🧠 2. AI 분석 (안전한 텍스트 파싱)
 # ---------------------------------------------------------
-def get_ai_analysis(target):
-    print(f"🧠 정밀 분석 요청: {target}")
+def get_ai_analysis(target, category_name):
+    print(f"🧠 분석 요청 [{category_name}]: {target}")
     model = "llama-3.3-70b-versatile"
     
-    # JSON 강요를 없애고, 텍스트 덩어리로 받음
     prompt = f"""
     Target Match: {target}
-    Role: Professional Sports Analyst.
+    Category: {category_name}
+    Role: Professional Sports Betting Analyst.
     
     Write a report in 3 languages using the EXACT format below.
     Do not use JSON. Just write the text.
@@ -95,25 +102,23 @@ def get_ai_analysis(target):
         response = client_groq.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model=model,
-            temperature=0.3 # 👈 온도를 낮춰서 헛소리 방지
+            temperature=0.3
         )
         return response.choices[0].message.content
     except Exception as e:
-        print(f"❌ 생성 에러: {e}")
+        print(f"❌ AI 에러: {e}")
         return None
 
 # ---------------------------------------------------------
-# ✂️ 3. 데이터 가공 (가위질)
+# ✂️ 3. 데이터 가공
 # ---------------------------------------------------------
 def parse_text_to_data(text):
     data = {}
-    
-    # 구분자로 텍스트 쪼개기
     try:
         if "===TITLE===" in text:
             data['title'] = text.split("===TITLE===")[1].split("===KR===")[0].strip()
         else:
-            data['title'] = "Unknown Match"
+            data['title'] = "Match Analysis"
             
         if "===KR===" in text:
             data['kr'] = text.split("===KR===")[1].split("===EN===")[0].strip()
@@ -124,90 +129,62 @@ def parse_text_to_data(text):
         if "===ZH===" in text:
             data['zh'] = text.split("===ZH===")[1].split("===END===")[0].strip()
             
-        # 픽(Pick)만 따로 추출해서 강조 (정규표현식)
-        # 한국어 파트에서 '최종 픽:' 뒤에 있는 내용을 잡음
-        pick_match = re.search(r'5\. 💰 최종 픽:(.*)', data.get('kr', ''))
-        if pick_match:
-            data['pick'] = pick_match.group(1).strip()
-        else:
-            data['pick'] = "See details"
-            
-    except Exception as e:
-        print(f"❌ 파싱 에러: {e}")
-        # 에러나면 통으로라도 보여주기 위해
-        data['kr'] = text
-        data['en'] = "Parsing Error"
-        data['zh'] = "Parsing Error"
-        data['pick'] = "Check Report"
-        
-    return data
+        return data
+    except:
+        return {"title": "Error", "kr": text, "en": "-", "zh": "-"}
 
 # ---------------------------------------------------------
-# 🚀 4. 메인 실행
+# 🚀 4. 메인 실행 루프 (종목별 순회)
 # ---------------------------------------------------------
 def run():
-    matches = fetch_real_matches()
+    print("🚀 [System] Daily Sports Analysis Started...")
     
-    if not matches:
-        print("💤 경기 없음.")
-        return
-
-    print(f"✅ 발견된 경기 수: {len(matches)}개")
-    target = random.choice(matches)
-    
-    # 1. AI가 글 쓰기
-    raw_text = get_ai_analysis(target)
-    if not raw_text: return
-    
-    # 2. 파이썬이 가위질하기
-    data = parse_text_to_data(raw_text)
-
-    # 3. 디스코드 포장
-    embed = {
-        "title": f"🏆 {data.get('title')}",
-        "description": f"**🤖 AI Analyst's Pick:**\n```fix\n{data.get('pick')}\n```",
-        "color": 3447003,
-        "fields": [
-            {
-                "name": "🇰🇷 한국어 분석",
-                "value": data.get('kr', '-'),
-                "inline": False
-            },
-            {
-                "name": "🇺🇸 English Report",
-                "value": data.get('en', '-'),
-                "inline": False
-            },
-            {
-                "name": "🇨🇳 中文报告",
-                "value": data.get('zh', '-'),
-                "inline": False
-            }
-        ],
-        "footer": {
-            "text": "Powered by Groq Llama-3 • Invest Responsibly",
-            "icon_url": "https://cdn-icons-png.flaticon.com/512/10605/10605937.png"
+    # 각 종목별로 루프를 돕니다.
+    for category_name, endpoints in SPORTS_CATEGORIES.items():
+        print(f"\n🔍 Searching for {category_name}...")
+        
+        matches = fetch_matches_by_category(endpoints)
+        
+        if not matches:
+            print(f"   💤 {category_name}: 예정된 경기 없음.")
+            continue # 다음 종목으로 넘어감
+            
+        # 해당 종목에서 랜덤으로 1경기 선정
+        target = random.choice(matches)
+        print(f"   ✅ Target Found: {target}")
+        
+        # 분석 시작
+        raw_text = get_ai_analysis(target, category_name)
+        if not raw_text: continue
+        
+        data = parse_text_to_data(raw_text)
+        
+        # 디스코드 전송
+        embed = {
+            "title": f"🏆 {category_name} Pick: {data.get('title')}",
+            "color": 3447003,
+            "fields": [
+                {"name": "🇰🇷 한국어 분석", "value": data.get('kr', '-'), "inline": False},
+                {"name": "🇺🇸 English Report", "value": data.get('en', '-'), "inline": False},
+                {"name": "🇨🇳 中文报告", "value": data.get('zh', '-'), "inline": False}
+            ],
+            "footer": {"text": "Powered by Groq Llama-3 • Not Financial Advice"}
         }
-    }
+        
+        payload = {"embeds": [embed]}
+        
+        if webhook_url:
+            try:
+                requests.post(webhook_url, json=payload)
+                print(f"   🚀 {category_name} 리포트 전송 완료!")
+            except Exception as e:
+                print(f"   ❌ 전송 실패: {e}")
+        
+        # 다음 종목 분석 전, AI도 숨 좀 돌리고 봇 탐지 피하기 위해 5초 휴식
+        print("   ⏳ Cooldown 5 seconds...")
+        time.sleep(5)
 
-    payload = {
-        "username": "AI Sports Edge",
-        "avatar_url": "https://cdn-icons-png.flaticon.com/512/2585/2585184.png",
-        "embeds": [embed]
-    }
-
-    if webhook_url:
-        print(f"🚀 디스코드 전송 시도...")
-        try:
-            res = requests.post(webhook_url, json=payload)
-            if res.status_code == 204:
-                print("✅ [성공] 전송 완료!")
-            else:
-                print(f"❌ [실패] 코드: {res.status_code}, 메시지: {res.text}")
-        except Exception as e:
-            print(f"❌ 전송 에러: {e}")
-    else:
-        print(json.dumps(data, indent=2, ensure_ascii=False))
+    print("\n🏁 [System] All Jobs Finished.")
 
 if __name__ == "__main__":
     run()
