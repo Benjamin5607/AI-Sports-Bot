@@ -1,0 +1,3 @@
+tweepy
+groq
+requests
