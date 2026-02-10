@@ -3,7 +3,6 @@ import requests
 import random
 import json
 import time
-from datetime import datetime
 from groq import Groq
 
 # 1. 환경 변수
@@ -13,76 +12,63 @@ groq_key = os.environ.get("GROQ_API_KEY")
 client_groq = Groq(api_key=groq_key)
 
 # ---------------------------------------------------------
-# 📡 데이터 소스: ESPN (The Global Standard)
+# 📡 1. 데이터 소스 (ESPN only - Real Data)
 # ---------------------------------------------------------
-def fetch_espn_matches():
-    # User-Agent를 최신 아이폰/크롬으로 위장
+def fetch_real_matches():
+    print("📡 ESPN 데이터 검색 시작...")
+    
+    # 헤더 위장 (봇 차단 방지)
     headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-        "Accept": "*/*"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     
-    # 인기 종목 API 엔드포인트
-    leagues = [
-        ("soccer/eng.1", "🇬🇧 EPL"), 
-        ("soccer/esp.1", "🇪🇸 La Liga"),
-        ("basketball/nba", "🇺🇸 NBA"),
-        ("soccer/uefa.champions", "🇪🇺 UCL")
+    # NBA, EPL, 챔스, 라리가 순회
+    endpoints = [
+        ("basketball/nba", "🏀 NBA"),
+        ("soccer/eng.1", "🇬🇧 EPL"),
+        ("soccer/uefa.champions", "🇪🇺 UCL"),
+        ("soccer/esp.1", "🇪🇸 La Liga")
     ]
     
-    match_list = []
+    real_matches = []
     
-    print("📡 ESPN 데이터 수신 중...")
-    
-    for endpoint, icon in leagues:
-        url = f"https://site.api.espn.com/apis/site/v2/sports/{endpoint}/scoreboard"
+    for sport, icon in endpoints:
+        url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/scoreboard"
         try:
-            res = requests.get(url, headers=headers, timeout=10)
+            res = requests.get(url, headers=headers, timeout=5)
             data = res.json()
             
             for event in data.get('events', []):
                 state = event.get('status', {}).get('type', {}).get('state', '')
-                # 'pre'(경기전) 상태인 것만 수집
+                name = event.get('name', 'Unknown')
+                
+                # 'pre'(경기전) 상태만 수집 (가상 데이터 절대 금지)
                 if state == 'pre':
-                    name = event.get('name', 'Unknown Match')
-                    match_list.append(f"{icon} {name}")
-            
-            time.sleep(1) # 차단 방지용 딜레이
-            
-        except Exception:
+                    real_matches.append(f"{icon} {name}")
+                    
+        except Exception as e:
+            print(f"⚠️ {icon} 검색 중 에러: {e}")
             continue
 
-    return list(set(match_list)) # 중복 제거 후 반환
+    return list(set(real_matches))
 
 # ---------------------------------------------------------
-# 🧠 AI 분석 (Trilingual Mode)
+# 🧠 2. AI 분석 (3개 국어)
 # ---------------------------------------------------------
-def get_trilingual_analysis(target_match):
-    # Llama 3는 언어 능력이 뛰어남
+def get_ai_analysis(target):
+    print(f"🧠 AI 분석 요청: {target}")
     model = "llama-3.3-70b-versatile"
     
-    print(f"🧠 분석 시작: {target_match} (3개 국어)")
-
     prompt = f"""
-    Target Match: {target_match}
+    Target: {target}
+    Analyze this match for sports betting.
     
-    You are a global sports betting expert.
-    Analyze this match and provide a prediction in strictly JSON format.
-    
-    Requirements for each language:
-    1. English (en): Professional, analytical tone.
-    2. Korean (ko): Natural predictions. Use terms like '정배'(favorite), '역배'(underdog). Don't sound translated.
-    3. Chinese (zh): Standard Mandarin, concise sports commentary style. Use Simplified Chinese.
-
-    JSON Structure:
+    Return the result in strict JSON format.
     {{
-        "en": "Prediction (Winner/Score) - Reason",
-        "ko": "예측 (승패/점수) - 핵심 근거",
-        "zh": "预测 (胜负/比分) - 分析理由",
-        "pick_icon": "🔥" (Hot) or "🛡️" (Safe) or "💣" (Risky)
+        "en": "Short prediction in English",
+        "ko": "한국어 예측 (정배/역배 용어 사용)",
+        "zh": "中文预测 (Simplified Chinese)"
     }}
-    
-    Output ONLY valid JSON. No markdown.
     """
     
     try:
@@ -91,68 +77,75 @@ def get_trilingual_analysis(target_match):
             model=model,
         )
         content = response.choices[0].message.content
-        # 혹시 Markdown ```json 같은거 붙으면 떼어내기
-        content = content.replace("```json", "").replace("```", "").strip()
+        # JSON 문자열만 추출
+        if "```" in content:
+            content = content.split("```json")[-1].split("```")[0].strip()
         return json.loads(content)
     except Exception as e:
-        print(f"❌ JSON 파싱 실패 또는 AI 에러: {e}")
+        print(f"❌ AI 분석 실패: {e}")
         return None
 
 # ---------------------------------------------------------
-# 🚀 메인 실행
+# 🚀 3. 메인 실행 & 로그 확인
 # ---------------------------------------------------------
 def run():
-    matches = fetch_espn_matches()
+    # 1. 경기 수집
+    matches = fetch_real_matches()
     
     if not matches:
-        print("💤 현재 예정된 주요 경기가 없습니다.")
+        print("💤 [결과] 현재 예정된 실제 경기가 없습니다. (종료)")
+        return # 가상 경기 생성 안 함. 그냥 퇴근.
+
+    print(f"✅ 발견된 경기 수: {len(matches)}개")
+    target = random.choice(matches)
+    
+    # 2. 분석
+    analysis = get_ai_analysis(target)
+    if not analysis:
+        print("❌ 분석 데이터가 비어있습니다. (종료)")
         return
 
-    # 랜덤으로 하나 뽑기
-    target_match = random.choice(matches)
-    result = get_trilingual_analysis(target_match)
-
-    if not result:
-        return
-
-    # 디스코드 전송 (Embed 꾸미기)
+    # 3. 디스코드 전송 (로그 집중)
     payload = {
-        "username": "AI Sports Edge Global",
-        "avatar_url": "[https://cdn-icons-png.flaticon.com/512/2072/2072130.png](https://cdn-icons-png.flaticon.com/512/2072/2072130.png)", # 지구본 아이콘
+        "username": "AI Sports Edge",
+        "avatar_url": "[https://cdn-icons-png.flaticon.com/512/2585/2585184.png](https://cdn-icons-png.flaticon.com/512/2585/2585184.png)",
         "embeds": [
             {
-                "title": f"{target_match}",
-                "description": f"**Global AI Prediction** {result.get('pick_icon', '⚽')}",
-                "color": 3092790, # 청록색
+                "title": f"🔥 Match Preview: {target}",
+                "color": 3447003, # Blue
                 "fields": [
-                    {
-                        "name": "🇺🇸 English",
-                        "value": result.get('en', 'Analysis Failed'),
-                        "inline": False
-                    },
-                    {
-                        "name": "🇰🇷 한국어",
-                        "value": result.get('ko', '분석 실패'),
-                        "inline": False
-                    },
-                    {
-                        "name": "🇨🇳 中文",
-                        "value": result.get('zh', '分析失败'),
-                        "inline": False
-                    }
+                    {"name": "🇺🇸 English", "value": analysis.get('en', '-'), "inline": False},
+                    {"name": "🇰🇷 한국어", "value": analysis.get('ko', '-'), "inline": False},
+                    {"name": "🇨🇳 中文", "value": analysis.get('zh', '-'), "inline": False}
                 ],
-                "footer": {
-                    "text": "Powered by ESPN Data & Groq AI"
-                }
+                "footer": {"text": "Real-time Data by ESPN"}
             }
         ]
     }
 
     if webhook_url:
-        requests.post(webhook_url, json=payload)
-        print("✅ 3개 국어 리포트 전송 완료!")
+        print(f"🚀 디스코드 전송 시작... (URL: {webhook_url[:10]}...)")
+        try:
+            res = requests.post(webhook_url, json=payload)
+            
+            # 👇 여기가 가장 중요합니다 (로그 확인용)
+            print(f"📡 응답 상태 코드: {res.status_code}")
+            
+            if res.status_code == 204:
+                print("✅ [성공] 디스코드 서버가 메시지를 정상적으로 수신했습니다.")
+            elif res.status_code == 400:
+                print(f"❌ [실패] 요청 형식이 잘못되었습니다. (Bad Request)")
+                print(f"⚠️ 에러 내용: {res.text}")
+            elif res.status_code == 404:
+                print(f"❌ [실패] 웹훅 URL이 올바르지 않습니다. (Not Found)")
+            else:
+                print(f"❌ [실패] 알 수 없는 오류: {res.text}")
+                
+        except Exception as e:
+            print(f"❌ [치명적 오류] 전송 중 예외 발생: {e}")
     else:
-        print(json.dumps(result, indent=2, ensure_ascii=False))
+        print("⚠️ 웹훅 URL이 설정되지 않아 전송을 건너뜁니다.")
+        print(json.dumps(analysis, indent=2, ensure_ascii=False))
 
 if __name__ == "__main__":
     run()
