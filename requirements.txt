@@ -1,3 +1,4 @@
 tweepy
-groq
 requests
+groq
+duckduckgo-search
