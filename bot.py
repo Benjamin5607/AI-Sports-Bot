@@ -2,7 +2,9 @@ import os
 import requests
 import random
 import time
+import re
 from groq import Groq
+from duckduckgo_search import DDGS # 👈 무료 검색 엔진 라이브러리
 
 # 1. 환경 변수
 webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
@@ -10,29 +12,17 @@ groq_key = os.environ.get("GROQ_API_KEY")
 
 client_groq = Groq(api_key=groq_key)
 
-# ---------------------------------------------------------
-# 📡 1. 종목별 데이터 소스 정의
-# ---------------------------------------------------------
 SPORTS_CATEGORIES = {
-    "⚽ SOCCER (Football)": [
-        ("soccer/eng.1", "🇬🇧 EPL"),
-        ("soccer/uefa.champions", "🇪🇺 UCL"),
-        ("soccer/esp.1", "🇪🇸 La Liga"),
-        ("soccer/ita.1", "🇮🇹 Serie A"),
-        ("soccer/deu.1", "🇩🇪 Bundesliga")
-    ],
-    "🏀 BASKETBALL": [
-        ("basketball/nba", "🇺🇸 NBA")
-    ],
-    "⚾ BASEBALL": [
-        ("baseball/mlb", "🇺🇸 MLB")
-    ]
+    "⚽ SOCCER": [("soccer/eng.1", "🇬🇧 EPL"), ("soccer/uefa.champions", "🇪🇺 UCL")],
+    "🏀 BASKETBALL": [("basketball/nba", "🇺🇸 NBA")],
+    "⚾ BASEBALL": [("baseball/mlb", "🇺🇸 MLB")]
 }
 
+# ---------------------------------------------------------
+# 📡 1. 경기 일정 수집 (ESPN)
+# ---------------------------------------------------------
 def fetch_matches_by_category(endpoints):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
+    headers = {"User-Agent": "Mozilla/5.0"}
     category_matches = []
     
     for sport_path, icon in endpoints:
@@ -42,9 +32,8 @@ def fetch_matches_by_category(endpoints):
             data = res.json()
             for event in data.get('events', []):
                 state = event.get('status', {}).get('type', {}).get('state', '')
-                name = event.get('name', 'Unknown')
-                # 경기 전(pre) 상태만 수집
                 if state == 'pre': 
+                    name = event.get('name', 'Unknown')
                     category_matches.append(f"{icon} {name}")
         except:
             continue
@@ -52,10 +41,39 @@ def fetch_matches_by_category(endpoints):
     return list(set(category_matches))
 
 # ---------------------------------------------------------
-# 🧠 2. AI 분석 (안전한 텍스트 파싱)
+# 📰 2. 실시간 뉴스 검색 (The Game Changer)
 # ---------------------------------------------------------
-def get_ai_analysis(target, category_name):
-    print(f"🧠 분석 요청 [{category_name}]: {target}")
+def fetch_latest_news(match_name):
+    print(f"📰 [{match_name}] 관련 최신 뉴스 검색 중...")
+    
+    # 이모지 제거 및 검색 쿼리 최적화
+    clean_name = re.sub(r'[^\w\s-]', '', match_name).strip()
+    query = f"{clean_name} injury news preview"
+    
+    news_context = ""
+    try:
+        with DDGS() as ddgs:
+            # 최근 1주일(timelimit='w') 뉴스 최대 3개 검색
+            results = ddgs.text(query, max_results=3, timelimit='w')
+            for idx, r in enumerate(results):
+                title = r.get('title', '')
+                body = r.get('body', '')
+                news_context += f"News {idx+1}: [{title}] - {body}\n"
+    except Exception as e:
+        print(f"⚠️ 뉴스 검색 에러 (무시하고 진행): {e}")
+        news_context = "최신 뉴스를 가져오지 못했습니다. 일반 지식으로 분석하세요."
+
+    if not news_context.strip():
+        news_context = "관련 뉴스가 없습니다."
+        
+    print("✅ 뉴스 스크랩 완료!")
+    return news_context
+
+# ---------------------------------------------------------
+# 🧠 3. AI 분석 (뉴스 데이터 주입)
+# ---------------------------------------------------------
+def get_ai_analysis(target, category_name, news_data):
+    print(f"🧠 AI 분석 중... (뉴스 데이터 반영)")
     model = "llama-3.3-70b-versatile"
     
     prompt = f"""
@@ -63,35 +81,38 @@ def get_ai_analysis(target, category_name):
     Category: {category_name}
     Role: Professional Sports Betting Analyst.
     
-    Write a report in 3 languages using the EXACT format below.
-    Do not use JSON. Just write the text.
+    🚨 [CRITICAL DATA - READ THIS FIRST] 🚨
+    Here are the latest news snippets regarding this match (Injuries, form, issues):
+    {news_data}
+    
+    Task: 
+    1. Base your analysis HEAVILY on the news provided above.
+    2. Mention specific recent issues or injuries found in the news.
+    3. Do NOT invent player names if they are not in the news.
     
     Format Structure:
     
     ===TITLE===
-    (Write the Match Title here)
+    (Match Title)
     
     ===KR===
-    (한국어로 작성)
-    1. 📊 전력 팩트: (2줄 요약)
-    2. 📉 최근 흐름: (5경기 분위기)
-    3. 🏃 키 플레이어: (선수명 - 이유)
-    4. 😈 악마의 속삭임: (배당 함정/변수 분석)
+    1. 📰 실시간 팩트: (제공된 뉴스 기반 최신 이슈/부상자 요약)
+    2. 📉 양 팀 기세: (뉴스 분위기 반영)
+    3. 🏃 승부처: (뉴스를 바탕으로 한 전술적 핵심)
+    4. 😈 악마의 속삭임: (뉴스의 이면이나 숨은 배당 함정)
     5. 💰 최종 픽: (승패/언오버)
     
     ===EN===
-    (Write in English)
-    1. Power Check: ...
-    2. Recent Form: ...
-    3. Key Player: ...
+    1. Live Fact Check: ...
+    2. Team Momentum: ...
+    3. Crucial Point: ...
     4. Devil's Whisper: ...
     5. Final Pick: ...
     
     ===ZH===
-    (Write in Simplified Chinese)
-    1. 实力分析: ...
-    2. 近期状态: ...
-    3. 关键球员: ...
+    1. 实时分析: ...
+    2. 球队气势: ...
+    3. 关键点: ...
     4. 恶魔低语: ...
     5. 最终预测: ...
     
@@ -110,7 +131,7 @@ def get_ai_analysis(target, category_name):
         return None
 
 # ---------------------------------------------------------
-# ✂️ 3. 데이터 가공
+# ✂️ 4. 데이터 가공
 # ---------------------------------------------------------
 def parse_text_to_data(text):
     data = {}
@@ -134,12 +155,11 @@ def parse_text_to_data(text):
         return {"title": "Error", "kr": text, "en": "-", "zh": "-"}
 
 # ---------------------------------------------------------
-# 🚀 4. 메인 실행 루프 (종목별 순회)
+# 🚀 5. 메인 루프
 # ---------------------------------------------------------
 def run():
-    print("🚀 [System] Daily Sports Analysis Started...")
+    print("🚀 [System] AI Sports Edge (RAG Edition) Started...")
     
-    # 각 종목별로 루프를 돕니다.
     for category_name, endpoints in SPORTS_CATEGORIES.items():
         print(f"\n🔍 Searching for {category_name}...")
         
@@ -147,28 +167,28 @@ def run():
         
         if not matches:
             print(f"   💤 {category_name}: 예정된 경기 없음.")
-            continue # 다음 종목으로 넘어감
+            continue 
             
-        # 해당 종목에서 랜덤으로 1경기 선정
         target = random.choice(matches)
         print(f"   ✅ Target Found: {target}")
         
-        # 분석 시작
-        raw_text = get_ai_analysis(target, category_name)
+        # 💡 [핵심] 뉴스 긁어오기
+        news_data = fetch_latest_news(target)
+        
+        raw_text = get_ai_analysis(target, category_name, news_data)
         if not raw_text: continue
         
         data = parse_text_to_data(raw_text)
         
-        # 디스코드 전송
         embed = {
             "title": f"🏆 {category_name} Pick: {data.get('title')}",
             "color": 3447003,
             "fields": [
-                {"name": "🇰🇷 한국어 분석", "value": data.get('kr', '-'), "inline": False},
+                {"name": "🇰🇷 한국어 (뉴스 기반 분석)", "value": data.get('kr', '-'), "inline": False},
                 {"name": "🇺🇸 English Report", "value": data.get('en', '-'), "inline": False},
                 {"name": "🇨🇳 中文报告", "value": data.get('zh', '-'), "inline": False}
             ],
-            "footer": {"text": "Powered by Groq Llama-3 • Not Financial Advice"}
+            "footer": {"text": "Powered by ESPN & Live News Search • AI Sports Edge"}
         }
         
         payload = {"embeds": [embed]}
@@ -180,8 +200,6 @@ def run():
             except Exception as e:
                 print(f"   ❌ 전송 실패: {e}")
         
-        # 다음 종목 분석 전, AI도 숨 좀 돌리고 봇 탐지 피하기 위해 5초 휴식
-        print("   ⏳ Cooldown 5 seconds...")
         time.sleep(5)
 
     print("\n🏁 [System] All Jobs Finished.")
