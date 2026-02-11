@@ -3,8 +3,9 @@ import requests
 import random
 import time
 import re
+import urllib.parse
+import xml.etree.ElementTree as ET # 👈 구글 뉴스 파싱용 (기본 내장)
 from groq import Groq
-from duckduckgo_search import DDGS # 👈 무료 검색 엔진 라이브러리
 
 # 1. 환경 변수
 webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
@@ -41,39 +42,46 @@ def fetch_matches_by_category(endpoints):
     return list(set(category_matches))
 
 # ---------------------------------------------------------
-# 📰 2. 실시간 뉴스 검색 (The Game Changer)
+# 📰 2. 구글 뉴스 RSS 해킹 (막힘 없는 팩트 수집)
 # ---------------------------------------------------------
-def fetch_latest_news(match_name):
-    print(f"📰 [{match_name}] 관련 최신 뉴스 검색 중...")
+def fetch_google_news(match_name):
+    print(f"📰 [{match_name}] 구글 뉴스 RSS 스캔 중...")
     
-    # 이모지 제거 및 검색 쿼리 최적화
-    clean_name = re.sub(r'[^\w\s-]', '', match_name).strip()
-    query = f"{clean_name} injury news preview"
+    # 검색어 정제 (예: "🇬🇧 EPL Manchester United vs West Ham" -> "Manchester United West Ham")
+    clean_name = re.sub(r'[^\w\s]', ' ', match_name).replace('EPL', '').replace('NBA', '').replace('MLB', '').strip()
+    
+    # 검색 쿼리: 팀 이름 + 부상(injury) 또는 프리뷰(preview)
+    query = urllib.parse.quote(f"{clean_name} injury OR preview OR news")
+    
+    # 구글 뉴스 RSS 주소 (영어 기사가 팩트가 가장 정확함)
+    url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
     
     news_context = ""
     try:
-        with DDGS() as ddgs:
-            # 최근 1주일(timelimit='w') 뉴스 최대 3개 검색
-            results = ddgs.text(query, max_results=3, timelimit='w')
-            for idx, r in enumerate(results):
-                title = r.get('title', '')
-                body = r.get('body', '')
-                news_context += f"News {idx+1}: [{title}] - {body}\n"
-    except Exception as e:
-        print(f"⚠️ 뉴스 검색 에러 (무시하고 진행): {e}")
-        news_context = "최신 뉴스를 가져오지 못했습니다. 일반 지식으로 분석하세요."
-
-    if not news_context.strip():
-        news_context = "관련 뉴스가 없습니다."
+        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
+        root = ET.fromstring(res.text)
         
-    print("✅ 뉴스 스크랩 완료!")
+        # 상위 4개 기사 제목과 발행일 가져오기
+        items = root.findall('.//item')[:4]
+        for idx, item in enumerate(items):
+            title = item.find('title').text
+            pub_date = item.find('pubDate').text
+            news_context += f"- [{pub_date}] {title}\n"
+            
+    except Exception as e:
+        print(f"⚠️ 뉴스 검색 실패: {e}")
+        
+    if not news_context.strip():
+        news_context = "관련 최신 뉴스를 찾을 수 없습니다. 일반 지식과 전력 위주로 분석하세요."
+        
+    print(f"✅ 수집된 뉴스 데이터:\n{news_context}")
     return news_context
 
 # ---------------------------------------------------------
-# 🧠 3. AI 분석 (뉴스 데이터 주입)
+# 🧠 3. AI 분석 (실시간 팩트 주입)
 # ---------------------------------------------------------
 def get_ai_analysis(target, category_name, news_data):
-    print(f"🧠 AI 분석 중... (뉴스 데이터 반영)")
+    print(f"🧠 AI 분석 시작...")
     model = "llama-3.3-70b-versatile"
     
     prompt = f"""
@@ -81,14 +89,14 @@ def get_ai_analysis(target, category_name, news_data):
     Category: {category_name}
     Role: Professional Sports Betting Analyst.
     
-    🚨 [CRITICAL DATA - READ THIS FIRST] 🚨
-    Here are the latest news snippets regarding this match (Injuries, form, issues):
+    🚨 [LIVE NEWS DATA] 🚨
+    Read these latest news headlines regarding the match:
     {news_data}
     
     Task: 
     1. Base your analysis HEAVILY on the news provided above.
-    2. Mention specific recent issues or injuries found in the news.
-    3. Do NOT invent player names if they are not in the news.
+    2. Explicitly mention injuries, manager quotes, or team form found in the headlines.
+    3. Do NOT invent information not present in the news or your established knowledge base.
     
     Format Structure:
     
@@ -96,10 +104,10 @@ def get_ai_analysis(target, category_name, news_data):
     (Match Title)
     
     ===KR===
-    1. 📰 실시간 팩트: (제공된 뉴스 기반 최신 이슈/부상자 요약)
-    2. 📉 양 팀 기세: (뉴스 분위기 반영)
-    3. 🏃 승부처: (뉴스를 바탕으로 한 전술적 핵심)
-    4. 😈 악마의 속삭임: (뉴스의 이면이나 숨은 배당 함정)
+    1. 📰 실시간 팩트: (뉴스 헤드라인을 바탕으로 한 최신 이슈 요약)
+    2. 📉 양 팀 기세: (상승세/하락세 분석)
+    3. 🏃 승부처: (뉴스를 반영한 전술적 핵심)
+    4. 😈 악마의 속삭임: (배당 함정이나 숨겨진 리스크)
     5. 💰 최종 픽: (승패/언오버)
     
     ===EN===
@@ -158,7 +166,7 @@ def parse_text_to_data(text):
 # 🚀 5. 메인 루프
 # ---------------------------------------------------------
 def run():
-    print("🚀 [System] AI Sports Edge (RAG Edition) Started...")
+    print("🚀 [System] AI Sports Edge (Google News RAG Edition) Started...")
     
     for category_name, endpoints in SPORTS_CATEGORIES.items():
         print(f"\n🔍 Searching for {category_name}...")
@@ -172,8 +180,8 @@ def run():
         target = random.choice(matches)
         print(f"   ✅ Target Found: {target}")
         
-        # 💡 [핵심] 뉴스 긁어오기
-        news_data = fetch_latest_news(target)
+        # 💡 구글 뉴스 RSS 스캔
+        news_data = fetch_google_news(target)
         
         raw_text = get_ai_analysis(target, category_name, news_data)
         if not raw_text: continue
@@ -188,7 +196,7 @@ def run():
                 {"name": "🇺🇸 English Report", "value": data.get('en', '-'), "inline": False},
                 {"name": "🇨🇳 中文报告", "value": data.get('zh', '-'), "inline": False}
             ],
-            "footer": {"text": "Powered by ESPN & Live News Search • AI Sports Edge"}
+            "footer": {"text": "Powered by ESPN & Google News RSS • AI Sports Edge"}
         }
         
         payload = {"embeds": [embed]}
